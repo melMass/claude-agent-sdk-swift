@@ -9,6 +9,9 @@ let package = Package(
     ],
     targets: [
         .target(name: "ClaudeAgentSDK"),
+        // A stand-in for the `claude` CLI that replays a scripted NDJSON conversation; used by the tests.
+        .executableTarget(name: "FakeClaude", dependencies: ["ClaudeAgentSDK"], path: "Sources/FakeClaude"),
+        .testTarget(name: "ClaudeAgentSDKTests", dependencies: ["ClaudeAgentSDK", "FakeClaude"]),
     ],
     swiftLanguageModes: [.v6]
 )
