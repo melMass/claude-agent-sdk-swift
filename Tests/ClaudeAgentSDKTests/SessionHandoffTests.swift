@@ -179,6 +179,36 @@ private func ownProcStart() throws -> String {
         #expect(reader.update(fixture.project.appendingPathComponent("\(a).jsonl"))?.map(\.uuid) == uuids)
     }
 
+    @Test func aSyntheticStandInGivesWayToTheAnswerItHid() throws {
+        let fixture = try SessionFixture()
+        defer { fixture.remove() }
+        // As CLI 2.1.310 wrote it: the answer before the attachment it hangs
+        // under, so a resume took the attachment for the end, added
+        // "No response requested." beside the answer and went on from there.
+        try fixture.write(a, [
+            entry("user", "u1", parent: nil, "Commands next?"),
+            entry("assistant", "x1", parent: "at1", [["type": "text", "text": "Command completion is in."]]),
+            ["type": "attachment", "uuid": "at1", "parentUuid": "u1", "sessionId": .string(a), "attachment": ["type": "deferred_tools_record"]],
+            entry("assistant", "s1", parent: "at1", [["type": "text", "text": "No response requested."]],
+                  extra: ["message": ["role": "assistant", "model": "<synthetic>", "content": [["type": "text", "text": "No response requested."]]]]),
+            entry("user", "u2", parent: "s1", "What do you remember?"),
+        ])
+        let uuids = ["u1", "x1", "u2"]
+        #expect(getSessionMessages(a, configDirectory: fixture.config.path).map(\.uuid) == uuids)
+        #expect(TranscriptReader().update(fixture.project.appendingPathComponent("\(a).jsonl"))?.map(\.uuid) == uuids)
+    }
+
+    @Test func aSyntheticMessageWithNoAnswerBesideItStays() throws {
+        let fixture = try SessionFixture()
+        defer { fixture.remove() }
+        try fixture.write(a, [
+            entry("user", "u1", parent: nil, "Hello"),
+            entry("assistant", "s1", parent: "u1", [["type": "text", "text": "API Error: overloaded"]],
+                  extra: ["message": ["role": "assistant", "model": "<synthetic>", "content": [["type": "text", "text": "API Error: overloaded"]]]]),
+        ])
+        #expect(getSessionMessages(a, configDirectory: fixture.config.path).map(\.uuid) == ["u1", "s1"])
+    }
+
     @Test func writtenSessionsReadBackUnderTheirDirectory() throws {
         let fixture = try SessionFixture()
         defer { fixture.remove() }

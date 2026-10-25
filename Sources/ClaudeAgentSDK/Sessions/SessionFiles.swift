@@ -317,6 +317,19 @@ enum SessionFiles {
             chain.append(entry)
             current = entry["parentUuid"]?.string.flatMap { byUUID[$0] }
         }
+        // A resume can take an answer for missing when it was written before
+        // the entry it hangs under: the CLI then adds a `<synthetic>` stand-in
+        // beside it and carries on from that. The answer takes its place.
+        for (index, entry) in chain.enumerated() where entry["message"]?["model"] == "<synthetic>" {
+            guard let parent = entry["parentUuid"]?.string,
+                  let answer = entries.last(where: {
+                      $0["type"] == "assistant" && $0["parentUuid"]?.string == parent && $0["message"]?["model"] != "<synthetic>"
+                          && !seen.contains($0["uuid"]?.string ?? "")
+                  }),
+                  let uuid = answer["uuid"]?.string else { continue }
+            chain[index] = answer
+            seen.insert(uuid)
+        }
         // Calls made together are written one under the other, and each
         // result under its own call: the results of all but the last call
         // branch off the chain. They follow their call.
