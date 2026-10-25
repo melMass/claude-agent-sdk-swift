@@ -161,9 +161,14 @@ private func entry(_ type: String, _ uuid: String, parent: String?, _ content: J
             entry("assistant", "a2", parent: "a1", [["type": "text", "text": "Result"]], session: Self.a, extra: ["isSidechain": true]),
         ]
         try Data((transcript.map(\.jsonString).joined(separator: "\n") + "\n").utf8).write(to: subagents.appendingPathComponent("agent-abc.jsonl"))
-        try JSONValue.object(["toolUseId": "toolu_agent"]).data().write(to: subagents.appendingPathComponent("agent-abc.meta.json"))
+        // As CLI 2.1.310 writes the sidecar.
+        try JSONValue.object(["toolUseId": "toolu_agent", "agentType": "Explore", "description": "Survey the config", "finished": true])
+            .data().write(to: subagents.appendingPathComponent("agent-abc.meta.json"))
 
         #expect(listSubagents(Self.a, configDirectory: fixture.config.path) == ["abc"])
+        #expect(listSubagentInfos(Self.a, configDirectory: fixture.config.path) == [
+            SubagentInfo(agentId: "abc", toolUseId: "toolu_agent", agentType: "Explore", description: "Survey the config", isFinished: true),
+        ])
         let messages = getSubagentMessages(Self.a, agentId: "abc", configDirectory: fixture.config.path)
         #expect(messages.map(\.uuid) == ["a1", "a2"])
         #expect(messages.allSatisfy { $0.parentToolUseId == "toolu_agent" })

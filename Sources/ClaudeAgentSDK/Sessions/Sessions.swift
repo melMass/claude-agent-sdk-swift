@@ -236,6 +236,39 @@ public func listSubagents(_ sessionId: String, directory: String? = nil, configD
     return agentFiles(sessionId, directory: directory, configDirectory: configDirectory).map(\.id)
 }
 
+/// A subagent as its `.meta.json` sidecar describes it: the Agent call that
+/// started it, known without reading its transcript.
+public struct SubagentInfo: Sendable, Hashable {
+    public var agentId: String
+    /// The Agent `tool_use` that started it.
+    public var toolUseId: String?
+    /// `general-purpose`, `Explore`, a plugin's agent, …
+    public var agentType: String?
+    public var description: String?
+    /// Set once the subagent has answered; older sidecars leave it out.
+    public var isFinished: Bool
+
+    public init(agentId: String, toolUseId: String? = nil, agentType: String? = nil, description: String? = nil, isFinished: Bool = false) {
+        self.agentId = agentId
+        self.toolUseId = toolUseId
+        self.agentType = agentType
+        self.description = description
+        self.isFinished = isFinished
+    }
+}
+
+/// A session's subagents and the calls that started them, from their sidecars only.
+public func listSubagentInfos(_ sessionId: String, directory: String? = nil, configDirectory: String? = nil) -> [SubagentInfo] {
+    guard SessionFiles.isUUID(sessionId) else { return [] }
+    return agentFiles(sessionId, directory: directory, configDirectory: configDirectory).map { agent in
+        let metaURL = agent.file.deletingLastPathComponent()
+            .appendingPathComponent(String(agent.file.lastPathComponent.dropLast(".jsonl".count)) + ".meta.json")
+        let meta = (try? Data(contentsOf: metaURL)).flatMap { try? JSONValue.parse($0) }
+        return SubagentInfo(agentId: agent.id, toolUseId: meta?["toolUseId"]?.string, agentType: meta?["agentType"]?.string,
+                            description: meta?["description"]?.string, isFinished: meta?["finished"]?.bool ?? false)
+    }
+}
+
 /// A subagent's conversation, oldest first. Each message carries the Agent
 /// `tool_use` that started the subagent, from its `.meta.json` sidecar.
 public func getSubagentMessages(
