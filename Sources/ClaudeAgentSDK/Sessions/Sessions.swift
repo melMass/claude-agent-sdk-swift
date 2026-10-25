@@ -30,6 +30,35 @@ public struct SessionMessage: Sendable {
     public var parentToolUseId: String?
     /// For a nested subagent's messages: the agent that started it.
     public var parentAgentId: String?
+    /// The whole transcript entry, for fields not modeled here.
+    public var entry: JSONValue
+
+    /// The message's content: a plain-text prompt is one text block.
+    public var content: [ContentBlock] {
+        let content = message["content"]
+        if let text = content?.string { return [.text(TextBlock(text: text))] }
+        return (content?.array ?? []).map(ContentBlock.init(json:))
+    }
+
+    /// The text blocks, joined.
+    public var text: String { content.compactMap(\.text).joined() }
+
+    /// When the entry was written.
+    public var timestamp: Date? { entry["timestamp"]?.string.flatMap(parseDate) }
+
+    /// The model that wrote an assistant message.
+    public var model: String? { message["model"]?.string }
+
+    /// A tool's structured result, on the user message that carries it.
+    public var toolUseResult: JSONValue? { entry["toolUseResult"]?.nonNull }
+
+    /// True for the summary that stands in for a compacted conversation.
+    public var isCompactSummary: Bool { entry["isCompactSummary"]?.bool ?? false }
+
+    /// True for a user message that holds only tool results, not a prompt.
+    public var isToolResult: Bool {
+        type == "user" && !content.isEmpty && content.allSatisfy { if case .toolResult = $0 { true } else { false } }
+    }
 }
 
 /// The new session made by ``forkSession(_:directory:upToMessageId:title:configDirectory:)``.
@@ -133,18 +162,18 @@ public func getSessionMessages(
 ) -> [SessionMessage] {
     guard SessionFiles.isUUID(sessionId),
           let (file, _) = SessionFiles.findSessionFile(sessionId, directory: directory, configDirectory: configDirectory),
-          let content = try? String(contentsOf: file, encoding: .utf8)
+          let content = try? Data(contentsOf: file, options: .mappedIfSafe)
     else { return [] }
-    let chain = SessionFiles.conversationChain(SessionFiles.transcriptEntries(content))
+    let chain = SessionFiles.conversationChain(SessionFiles.tailEntries(content))
     let messages = chain.filter(SessionFiles.isVisible).map { sessionMessage($0) }
     return SessionFiles.page(messages, limit: limit, offset: offset)
 }
 
-private func sessionMessage(_ entry: JSONValue, parentToolUseId: String? = nil, parentAgentId: String? = nil) -> SessionMessage {
+func sessionMessage(_ entry: JSONValue, parentToolUseId: String? = nil, parentAgentId: String? = nil) -> SessionMessage {
     SessionMessage(
         type: entry["type"] == "user" ? "user" : "assistant", uuid: entry["uuid"]?.string ?? "",
         sessionId: entry["sessionId"]?.string ?? "", message: entry["message"] ?? .null,
-        parentToolUseId: parentToolUseId, parentAgentId: parentAgentId)
+        parentToolUseId: parentToolUseId, parentAgentId: parentAgentId, entry: entry)
 }
 
 /// `agent-<id>.jsonl` transcripts under a session's `subagents/` folder, nested folders included.
@@ -182,7 +211,7 @@ public func getSubagentMessages(
 ) -> [SessionMessage] {
     guard SessionFiles.isUUID(sessionId), !agentId.isEmpty,
           let match = agentFiles(sessionId, directory: directory, configDirectory: configDirectory).first(where: { $0.id == agentId }),
-          let content = try? String(contentsOf: match.file, encoding: .utf8)
+          let content = try? Data(contentsOf: match.file, options: .mappedIfSafe)
     else { return [] }
     let metaURL = match.file.deletingLastPathComponent()
         .appendingPathComponent(String(match.file.lastPathComponent.dropLast(".jsonl".count)) + ".meta.json")

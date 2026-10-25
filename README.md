@@ -146,6 +146,40 @@ let fork = try forkSession(recent[0].sessionId, upToMessageId: messages[3].uuid)
 options.resume = fork.sessionId
 ```
 
+`getSessionMessages` reads a transcript from its end and stops at the last
+compaction, so a session of hundreds of MB opens in a fraction of a second.
+Each `SessionMessage` has typed `content` (`ContentBlock`s), `text`, `model`,
+`timestamp`, `toolUseResult` and the whole `entry`.
+
+### Taking turns with Claude Code
+
+A session can move between a terminal and an app: one closes it, the other
+resumes it. Only one process should have it open at a time; both would append
+to its transcript.
+
+```swift
+// Claude Code processes running now, from <config>/sessions/<pid>.json.
+for session in runningSessions() { print(session.pid, session.status, session.sessionId, session.cwd) }
+
+// Resume in the app: sets `resume` and `cwd` (the CLI only resumes a session
+// from its own directory); throws SessionInUseError while a terminal has it open.
+try options.resume(id)            // or `fork: true` to continue in a copy
+
+// Hand it back: "cd '/path/to/project' && claude --resume <id>"
+let command = resumeCommand(id, cwd: info.cwd!)
+
+// Another provider's conversation as a session Claude Code can resume.
+let imported = try writeSession(messages, cwd: "/path/to/project", title: "From ChatGPT")
+
+// Keep a browser current (FSEvents): transcripts written, processes started or ended.
+for await change in sessionChanges() { … }
+// Or follow one conversation; only appended lines are parsed.
+for await messages in sessionMessageUpdates(id) { … }
+```
+
+The running-session records and the transcript format are Claude Code's own,
+undocumented; unknown fields are ignored (checked against CLI 2.1.289–2.1.310).
+
 ### Examples
 
 ```sh
@@ -203,6 +237,7 @@ Compared with the Python SDK 0.2.165 and the TypeScript SDK 0.3.296, against Cla
 | Run-end handling (session state, background agents, ceiling) | ✓ | ✓ | ✓ |
 | Error types (`CLINotFound`, `ProcessError`, `ResultError`, JSON decode) | ✓ | ✓ | ✓ |
 | Session helpers: list, info, messages, subagents, rename, tag, delete, fork | ✓ | ✓ | ✓ |
+| Running sessions, resume guard, `resumeCommand`, `writeSession`, change streams | – | – | ✓ |
 | Custom transport | ✓ `Transport` | `spawnClaudeCodeProcess` | ✓ `Transport` |
 
 Not supported, and why:
