@@ -136,19 +136,28 @@ private func ownProcStart() throws -> String {
             // As CLI 2.1.310 records a message taken mid-turn.
             ["type": "attachment", "uuid": "q1", "parentUuid": "u2", "sessionId": .string(a), "isSidechain": false,
              "attachment": ["type": "queued_command", "prompt": "Skip the slow ones", "commandMode": "prompt"]],
-            entry("user", "u3", parent: "q1", [["type": "tool_result", "tool_use_id": "t1", "content": "ok"]]),
+            // One sent with an image: the prompt is content blocks.
+            ["type": "attachment", "uuid": "q2", "parentUuid": "q1", "sessionId": .string(a), "isSidechain": false,
+             "attachment": ["type": "queued_command", "commandMode": "prompt", "prompt": [
+                 ["type": "text", "text": "And this one"],
+                 ["type": "image", "source": ["type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="]],
+             ]]],
+            entry("user", "u3", parent: "q2", [["type": "tool_result", "tool_use_id": "t1", "content": "ok"]]),
             entry("assistant", "u4", parent: "u3", [["type": "text", "text": "Done, skipping the slow ones."]]),
         ])
         #expect(getSessionMessages(a, configDirectory: fixture.config.path).map(\.uuid) == ["u1", "u2", "u3", "u4"])
         let messages = getSessionMessages(a, includesSteers: true, configDirectory: fixture.config.path)
-        #expect(messages.map(\.uuid) == ["u1", "u2", "q1", "u3", "u4"])
+        #expect(messages.map(\.uuid) == ["u1", "u2", "q1", "q2", "u3", "u4"])
         #expect(messages[2].type == "user")
         #expect(messages[2].isSteer)
         #expect(messages[2].text == "Skip the slow ones")
+        #expect(messages[3].isSteer)
+        #expect(messages[3].text == "And this one")
+        #expect(messages[3].content.count == 2)
         #expect(!messages[0].isSteer)
 
         let reader = TranscriptReader(includesSteers: true)
-        #expect(reader.update(fixture.project.appendingPathComponent("\(a).jsonl"))?.map(\.uuid) == ["u1", "u2", "q1", "u3", "u4"])
+        #expect(reader.update(fixture.project.appendingPathComponent("\(a).jsonl"))?.map(\.uuid) == ["u1", "u2", "q1", "q2", "u3", "u4"])
     }
 
     @Test func writtenSessionsReadBackUnderTheirDirectory() throws {

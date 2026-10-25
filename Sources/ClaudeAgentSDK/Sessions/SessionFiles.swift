@@ -380,9 +380,12 @@ enum SessionFiles {
     }
 
     /// An `attachment` entry of type `queued_command` with a prompt: how the
-    /// CLI records a message it took mid-turn (CLI 2.1.310).
+    /// CLI records a message it took mid-turn (CLI 2.1.310). The prompt is a
+    /// string, or content blocks when the message carried images.
     static func isSteer(_ entry: JSONValue) -> Bool {
-        entry["type"] == "attachment" && entry["attachment"]?["type"] == "queued_command" && entry["attachment"]?["prompt"]?.string != nil
+        guard entry["type"] == "attachment", entry["attachment"]?["type"] == "queued_command",
+              let prompt = entry["attachment"]?["prompt"] else { return false }
+        return prompt.string != nil || prompt.array != nil
     }
 
     static func page<T>(_ items: [T], limit: Int?, offset: Int) -> [T] {
