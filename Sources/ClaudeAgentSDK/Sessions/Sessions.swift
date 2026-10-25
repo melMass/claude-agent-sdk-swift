@@ -76,6 +76,11 @@ public struct SessionMessage: Sendable {
     public var isToolResult: Bool {
         type == "user" && !content.isEmpty && content.allSatisfy { if case .toolResult = $0 { true } else { false } }
     }
+
+    /// True for a message the person sent during a turn, which the CLI took
+    /// into that turn: an `attachment` entry of type `queued_command`, read
+    /// as a user message (see `includesSteers`).
+    public var isSteer: Bool { entry["type"] == "attachment" }
 }
 
 /// The new session made by ``forkSession(_:directory:upToMessageId:title:configDirectory:)``.
@@ -174,20 +179,31 @@ public func getSessionInfo(_ sessionId: String, directory: String? = nil, config
 
 /// A session's conversation, oldest first: user and assistant messages along
 /// the transcript's main chain. Empty when the session is not found.
+///
+/// - Parameter includesSteers: Also the messages the person sent during a
+///   turn, which the CLI took into it (``SessionMessage/isSteer``). The
+///   official SDKs leave them out.
 public func getSessionMessages(
-    _ sessionId: String, directory: String? = nil, limit: Int? = nil, offset: Int = 0, configDirectory: String? = nil
+    _ sessionId: String, directory: String? = nil, limit: Int? = nil, offset: Int = 0, includesSteers: Bool = false,
+    configDirectory: String? = nil
 ) -> [SessionMessage] {
     guard SessionFiles.isUUID(sessionId),
           let (file, _) = SessionFiles.findSessionFile(sessionId, directory: directory, configDirectory: configDirectory),
           let content = try? Data(contentsOf: file, options: .mappedIfSafe)
     else { return [] }
     let chain = SessionFiles.conversationChain(SessionFiles.tailEntries(content))
-    let messages = chain.filter(SessionFiles.isVisible).map { sessionMessage($0) }
+    let messages = chain.filter { SessionFiles.isVisible($0, includesSteers: includesSteers) }.map { sessionMessage($0) }
     return SessionFiles.page(messages, limit: limit, offset: offset)
 }
 
+/// A transcript entry as a message; a steer (`queued_command`) as a user message of its prompt.
 func sessionMessage(_ entry: JSONValue, parentToolUseId: String? = nil, parentAgentId: String? = nil) -> SessionMessage {
-    SessionMessage(
+    if SessionFiles.isSteer(entry), let prompt = entry["attachment"]?["prompt"] {
+        return SessionMessage(
+            type: "user", uuid: entry["uuid"]?.string ?? "", sessionId: entry["sessionId"]?.string ?? "",
+            message: ["role": "user", "content": prompt], parentToolUseId: parentToolUseId, parentAgentId: parentAgentId, entry: entry)
+    }
+    return SessionMessage(
         type: entry["type"] == "user" ? "user" : "assistant", uuid: entry["uuid"]?.string ?? "",
         sessionId: entry["sessionId"]?.string ?? "", message: entry["message"] ?? .null,
         parentToolUseId: parentToolUseId, parentAgentId: parentAgentId, entry: entry)

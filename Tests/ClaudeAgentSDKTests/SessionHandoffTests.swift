@@ -127,6 +127,30 @@ private func ownProcStart() throws -> String {
         #expect(messages[0].timestamp == ISO8601DateFormatter().date(from: "2026-10-01T10:00:00Z"))
     }
 
+    @Test func steersReadAsUserMessagesWhenAskedFor() throws {
+        let fixture = try SessionFixture()
+        defer { fixture.remove() }
+        try fixture.write(a, [
+            entry("user", "u1", parent: nil, "Run the tests"),
+            entry("assistant", "u2", parent: "u1", [["type": "tool_use", "id": "t1", "name": "Bash", "input": ["command": "swift test"]]]),
+            // As CLI 2.1.310 records a message taken mid-turn.
+            ["type": "attachment", "uuid": "q1", "parentUuid": "u2", "sessionId": .string(a), "isSidechain": false,
+             "attachment": ["type": "queued_command", "prompt": "Skip the slow ones", "commandMode": "prompt"]],
+            entry("user", "u3", parent: "q1", [["type": "tool_result", "tool_use_id": "t1", "content": "ok"]]),
+            entry("assistant", "u4", parent: "u3", [["type": "text", "text": "Done, skipping the slow ones."]]),
+        ])
+        #expect(getSessionMessages(a, configDirectory: fixture.config.path).map(\.uuid) == ["u1", "u2", "u3", "u4"])
+        let messages = getSessionMessages(a, includesSteers: true, configDirectory: fixture.config.path)
+        #expect(messages.map(\.uuid) == ["u1", "u2", "q1", "u3", "u4"])
+        #expect(messages[2].type == "user")
+        #expect(messages[2].isSteer)
+        #expect(messages[2].text == "Skip the slow ones")
+        #expect(!messages[0].isSteer)
+
+        let reader = TranscriptReader(includesSteers: true)
+        #expect(reader.update(fixture.project.appendingPathComponent("\(a).jsonl"))?.map(\.uuid) == ["u1", "u2", "q1", "u3", "u4"])
+    }
+
     @Test func writtenSessionsReadBackUnderTheirDirectory() throws {
         let fixture = try SessionFixture()
         defer { fixture.remove() }

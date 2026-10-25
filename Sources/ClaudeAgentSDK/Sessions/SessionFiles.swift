@@ -370,9 +370,19 @@ enum SessionFiles {
         }
     }
 
-    static func isVisible(_ entry: JSONValue) -> Bool {
+    /// A user or assistant message of the main conversation; with
+    /// `includesSteers`, also a message sent during a turn (a `queued_command`
+    /// attachment the CLI took into it).
+    static func isVisible(_ entry: JSONValue, includesSteers: Bool = false) -> Bool {
+        if includesSteers, isSteer(entry) { return entry["isSidechain"]?.bool != true }
         guard entry["type"] == "user" || entry["type"] == "assistant" else { return false }
         return entry["isMeta"]?.bool != true && entry["isSidechain"]?.bool != true && entry["teamName"]?.nonNull == nil
+    }
+
+    /// An `attachment` entry of type `queued_command` with a prompt: how the
+    /// CLI records a message it took mid-turn (CLI 2.1.310).
+    static func isSteer(_ entry: JSONValue) -> Bool {
+        entry["type"] == "attachment" && entry["attachment"]?["type"] == "queued_command" && entry["attachment"]?["prompt"]?.string != nil
     }
 
     static func page<T>(_ items: [T], limit: Int?, offset: Int) -> [T] {

@@ -42,15 +42,16 @@ public func sessionChanges(configDirectory: String? = nil, latency: TimeInterval
 }
 
 /// A session's conversation each time its transcript changes, the current one
-/// first: what ``getSessionMessages(_:directory:limit:offset:configDirectory:)``
+/// first: what ``getSessionMessages(_:directory:limit:offset:includesSteers:configDirectory:)``
 /// returns, read incrementally (only lines appended since the last read are
 /// parsed). Empty while the session has no transcript.
 public func sessionMessageUpdates(
-    _ sessionId: String, directory: String? = nil, configDirectory: String? = nil, latency: TimeInterval = 0.2
+    _ sessionId: String, directory: String? = nil, includesSteers: Bool = false, configDirectory: String? = nil,
+    latency: TimeInterval = 0.2
 ) -> AsyncStream<[SessionMessage]> {
     AsyncStream { continuation in
         let task = Task {
-            let reader = TranscriptReader()
+            let reader = TranscriptReader(includesSteers: includesSteers)
             func read() {
                 let file = SessionFiles.findSessionFile(sessionId, directory: directory, configDirectory: configDirectory)?.file
                 if let messages = reader.update(file) { continuation.yield(messages) }
@@ -83,12 +84,17 @@ enum SessionChangeMapping {
 /// only complete lines appended since; starts over when the file is replaced
 /// (another inode) or shrinks.
 final class TranscriptReader {
+    private let includesSteers: Bool
     private var file: URL?
     private var inode: UInt64?
     private var offset: UInt64 = 0
     private var pending = Data()
     private var entries: [JSONValue] = []
     private var last: [SessionMessage]?
+
+    init(includesSteers: Bool = false) {
+        self.includesSteers = includesSteers
+    }
 
     /// The conversation when it differs from the last one returned, else nil.
     func update(_ url: URL?) -> [SessionMessage]? {
@@ -118,7 +124,7 @@ final class TranscriptReader {
             }
         }
         let chain = SessionFiles.conversationChain(entries)
-        return emit(chain.filter(SessionFiles.isVisible).map { sessionMessage($0) })
+        return emit(chain.filter { SessionFiles.isVisible($0, includesSteers: includesSteers) }.map { sessionMessage($0) })
     }
 
     private func reset(_ url: URL?) {
