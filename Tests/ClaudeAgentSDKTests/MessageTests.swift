@@ -14,6 +14,17 @@ import Testing
         #expect(try JSONValue.parse(value.jsonString) == value)
     }
 
+    @Test func bulkReadingKeepsZeroOneAndFalseTrueApart() throws {
+        func bulk(_ text: String) throws -> JSONValue {
+            try JSONValue(foundation: JSONSerialization.jsonObject(with: Data(text.utf8), options: [.fragmentsAllowed]))
+        }
+        let value = try bulk(#"{"a":[0,1,false,true,-3,2.0,1.5,18446744073709551615,"é",null]}"#)
+        #expect(value == ["a": [.int(0), .int(1), .bool(false), .bool(true), .int(-3), .double(2), .double(1.5),
+                                .double(18_446_744_073_709_551_615), "é", .null]])
+        let line = #"{"i":1,"d":1.5,"b":true,"n":null,"s":"x","big":12345678901234}"#
+        #expect(try bulk(line) == JSONValue.parse(line))
+    }
+
     @Test func encodesCompactSortedAndUnescapedSlashes() {
         let value: JSONValue = ["b": 1, "a": ["url": "https://x/y", "text": "line\nbreak \u{2028}"]]
         #expect(value.jsonString == #"{"a":{"text":"line\nbreak \#u{2028}","url":"https://x/y"},"b":1}"#)

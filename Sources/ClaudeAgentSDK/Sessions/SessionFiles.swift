@@ -155,31 +155,41 @@ enum SessionFiles {
         stringFields(text, key).last
     }
 
+    /// Every `"key":"…"` value in `text`, in order, found by a byte search
+    /// (`memmem`): a listing scans 128 KiB of every transcript for several keys.
     private static func stringFields(_ text: String, _ key: String) -> [String] {
-        var values: [(position: String.Index, value: String)] = []
-        for pattern in ["\"\(key)\":\"", "\"\(key)\": \""] {
-            var searchStart = text.startIndex
-            while let range = text.range(of: pattern, range: searchStart..<text.endIndex) {
-                var index = range.upperBound
-                var escaped = false
-                var found = false
-                while index < text.endIndex {
-                    let character = text[index]
-                    if escaped {
-                        escaped = false
-                    } else if character == "\\" {
-                        escaped = true
-                    } else if character == "\"" {
-                        values.append((range.lowerBound, unescape(String(text[range.upperBound..<index]))))
-                        found = true
-                        break
+        var text = text
+        return text.withUTF8 { bytes -> [String] in
+            guard let base = bytes.baseAddress else { return [] }
+            var values: [(position: Int, value: String)] = []
+            for pattern in ["\"\(key)\":\"", "\"\(key)\": \""] {
+                let needle = Array(pattern.utf8)
+                var start = 0
+                while start < bytes.count,
+                      let hit = memmem(base + start, bytes.count - start, needle, needle.count)
+                {
+                    let valueStart = base.distance(to: hit.assumingMemoryBound(to: UInt8.self)) + needle.count
+                    var index = valueStart
+                    var escaped = false
+                    while index < bytes.count {
+                        let byte = bytes[index]
+                        if escaped {
+                            escaped = false
+                        } else if byte == UInt8(ascii: "\\") {
+                            escaped = true
+                        } else if byte == UInt8(ascii: "\"") {
+                            break
+                        }
+                        index += 1
                     }
-                    index = text.index(after: index)
+                    guard index < bytes.count else { break }
+                    let raw = String(decoding: UnsafeBufferPointer(rebasing: bytes[valueStart..<index]), as: UTF8.self)
+                    values.append((valueStart - needle.count, unescape(raw)))
+                    start = index + 1
                 }
-                searchStart = found ? text.index(after: index) : text.endIndex
             }
+            return values.sorted { $0.position < $1.position }.map(\.value)
         }
-        return values.sorted { $0.position < $1.position }.map(\.value)
     }
 
     private static func unescape(_ raw: String) -> String {
@@ -232,12 +242,42 @@ enum SessionFiles {
 
     /// The entries of a transcript that belong to the message chain (they have a uuid).
     static func transcriptEntries(_ content: String) -> [JSONValue] {
-        content.split(separator: "\n").compactMap { line in
-            guard let entry = try? JSONValue.parse(String(line)), let type = entry["type"]?.string,
-                  chainEntryTypes.contains(type), entry["uuid"]?.string != nil
-            else { return nil }
-            return entry
+        transcriptEntries(Data(content.utf8))
+    }
+
+    /// The chain entries of transcript bytes, split on newlines as bytes: a
+    /// long transcript is hundreds of MB, too slow to split as a `String`.
+    static func transcriptEntries(_ data: Data) -> [JSONValue] {
+        data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> [JSONValue] in
+            let bytes = buffer.bindMemory(to: UInt8.self)
+            var entries: [JSONValue] = []
+            var start = 0
+            while start < bytes.count {
+                let end = bytes[start...].firstIndex(of: 0x0A) ?? bytes.count
+                let line = UnsafeBufferPointer(rebasing: bytes[start..<end])
+                start = end + 1
+                guard !line.isEmpty, !isBookkeeping(line),
+                      let object = try? JSONSerialization.jsonObject(with: Data(line)),
+                      let entry = try? JSONValue(foundation: object), let type = entry["type"]?.string,
+                      chainEntryTypes.contains(type), entry["uuid"]?.string != nil
+                else { continue }
+                entries.append(entry)
+            }
+            return entries
         }
+    }
+
+    private static let typePrefix = Array("{\"type\":\"".utf8)
+    private static let chainEntryTypeBytes = chainEntryTypes.map { Array($0.utf8) + [UInt8(ascii: "\"")] }
+
+    /// A line the CLI writes type-first (`{"type":"api-request",…}`) whose type
+    /// is not a chain entry's, told apart without parsing it. Request dumps,
+    /// titles and file-history snapshots make up about half of a long transcript;
+    /// chain entries start with `{"parentUuid"`, so they always get parsed.
+    static func isBookkeeping(_ line: UnsafeBufferPointer<UInt8>) -> Bool {
+        guard line.starts(with: typePrefix) else { return false }
+        let rest = line[typePrefix.count...]
+        return !chainEntryTypeBytes.contains { rest.starts(with: $0) }
     }
 
     /// The conversation, root to leaf: from the latest main-chain leaf, walked
@@ -278,6 +318,56 @@ enum SessionFiles {
             current = entry["parentUuid"]?.string.flatMap { byUUID[$0] }
         }
         return chain.reversed()
+    }
+
+    /// The chain entries of transcript bytes that ``conversationChain(_:)``
+    /// needs, in file order, read from the end: the leaf is the last
+    /// main-chain message, and lines are parsed backward only until its chain
+    /// reaches a root, so the result also holds every entry after it. A
+    /// compaction starts the chain over: a long session parses only what
+    /// followed its last one. With no main-chain message, every entry.
+    static func tailEntries(_ data: Data) -> [JSONValue] {
+        data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> [JSONValue] in
+            let bytes = buffer.bindMemory(to: UInt8.self)
+            // Lines before `end` are still unread.
+            var end = bytes.count
+            var read: [JSONValue] = []
+            var byUUID: [String: JSONValue] = [:]
+            var leaf: JSONValue?
+            /// Reads the line before `end`, keeping it when it is a chain entry
+            /// (the first main-chain message so found is the leaf); false once
+            /// the whole file is read.
+            func readPrevious() -> Bool {
+                guard end > 0 else { return false }
+                let newline = bytes[..<end].lastIndex(of: 0x0A)
+                let line = UnsafeBufferPointer(rebasing: bytes[(newline.map { $0 + 1 } ?? 0)..<end])
+                end = newline ?? 0
+                guard !line.isEmpty, !isBookkeeping(line),
+                      let object = try? JSONSerialization.jsonObject(with: Data(line)),
+                      let entry = try? JSONValue(foundation: object), let type = entry["type"]?.string,
+                      chainEntryTypes.contains(type), let uuid = entry["uuid"]?.string
+                else { return true }
+                read.append(entry)
+                byUUID[uuid] = entry
+                if leaf == nil, type == "user" || type == "assistant", entry["isSidechain"]?.bool != true,
+                   entry["teamName"]?.nonNull == nil, entry["isMeta"]?.bool != true
+                {
+                    leaf = entry
+                }
+                return true
+            }
+            while leaf == nil, readPrevious() {}
+            // A parent is always written before its child: read back until it turns up.
+            var seen: Set<String> = []
+            var current = leaf
+            while let entry = current, let uuid = entry["uuid"]?.string, seen.insert(uuid).inserted,
+                  let parent = entry["parentUuid"]?.string
+            {
+                while byUUID[parent] == nil, readPrevious() {}
+                current = byUUID[parent]
+            }
+            return read.reversed()
+        }
     }
 
     static func isVisible(_ entry: JSONValue) -> Bool {

@@ -157,6 +157,34 @@ extension JSONValue {
         try JSONDecoder().decode(JSONValue.self, from: data)
     }
 
+    /// A value `JSONSerialization` made, for bulk reads such as transcripts
+    /// (hundreds of MB), where it is about five times faster than `JSONDecoder`.
+    /// Its numbers are `NSNumber`s: a
+    /// boolean is the `CFBoolean` singleton, and an integer is any number
+    /// that is not a floating-point type.
+    init(foundation value: Any) throws {
+        switch value {
+        case is NSNull:
+            self = .null
+        case let number as NSNumber:
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+                self = .bool(number.boolValue)
+            } else if !CFNumberIsFloatType(number), let int = Int(exactly: number.int64Value), number.compare(NSNumber(value: int)) == .orderedSame {
+                self = .int(int)
+            } else {
+                self = .double(number.doubleValue)
+            }
+        case let string as String:
+            self = .string(string)
+        case let array as [Any]:
+            self = try .array(array.map(JSONValue.init(foundation:)))
+        case let object as [String: Any]:
+            self = try .object(object.mapValues(JSONValue.init(foundation:)))
+        default:
+            throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Not a JSON value: \(type(of: value))"))
+        }
+    }
+
     /// Parses one JSON document from text.
     public static func parse(_ text: String) throws -> JSONValue {
         try parse(Data(text.utf8))
