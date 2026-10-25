@@ -160,6 +160,25 @@ private func ownProcStart() throws -> String {
         #expect(reader.update(fixture.project.appendingPathComponent("\(a).jsonl"))?.map(\.uuid) == ["u1", "u2", "q1", "q2", "u3", "u4"])
     }
 
+    @Test func resultsOfParallelCallsStayInTheConversation() throws {
+        let fixture = try SessionFixture()
+        defer { fixture.remove() }
+        // As the CLI writes two calls of one message: the second call under the
+        // first, each result under its own call, so the first result branches off.
+        try fixture.write(a, [
+            entry("user", "u1", parent: nil, "Look at both"),
+            entry("assistant", "c1", parent: "u1", [["type": "tool_use", "id": "t1", "name": "Bash", "input": ["command": "ls"]]]),
+            entry("assistant", "c2", parent: "c1", [["type": "tool_use", "id": "t2", "name": "Read", "input": ["file_path": "/a"]]]),
+            entry("user", "r1", parent: "c1", [["type": "tool_result", "tool_use_id": "t1", "content": "a.txt"]]),
+            entry("user", "r2", parent: "c2", [["type": "tool_result", "tool_use_id": "t2", "content": "hello"]]),
+            entry("assistant", "x1", parent: "r2", [["type": "text", "text": "Both read."]]),
+        ])
+        let uuids = ["u1", "c1", "r1", "c2", "r2", "x1"]
+        #expect(getSessionMessages(a, configDirectory: fixture.config.path).map(\.uuid) == uuids)
+        let reader = TranscriptReader()
+        #expect(reader.update(fixture.project.appendingPathComponent("\(a).jsonl"))?.map(\.uuid) == uuids)
+    }
+
     @Test func writtenSessionsReadBackUnderTheirDirectory() throws {
         let fixture = try SessionFixture()
         defer { fixture.remove() }

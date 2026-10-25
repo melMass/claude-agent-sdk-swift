@@ -317,7 +317,22 @@ enum SessionFiles {
             chain.append(entry)
             current = entry["parentUuid"]?.string.flatMap { byUUID[$0] }
         }
-        return chain.reversed()
+        // Calls made together are written one under the other, and each
+        // result under its own call: the results of all but the last call
+        // branch off the chain. They follow their call.
+        var results: [String: [JSONValue]] = [:]
+        for entry in entries where !seen.contains(entry["uuid"]?.string ?? "") && isToolResults(entry) {
+            if let parent = entry["parentUuid"]?.string, seen.contains(parent) { results[parent, default: []].append(entry) }
+        }
+        guard !results.isEmpty else { return chain.reversed() }
+        return chain.reversed().flatMap { entry in [entry] + (results[entry["uuid"]?.string ?? ""] ?? []) }
+    }
+
+    /// A main-conversation user entry that holds only tool results.
+    private static func isToolResults(_ entry: JSONValue) -> Bool {
+        guard entry["type"] == "user", entry["isSidechain"]?.bool != true,
+              let blocks = entry["message"]?["content"]?.array, !blocks.isEmpty else { return false }
+        return blocks.allSatisfy { $0["type"] == "tool_result" }
     }
 
     /// The chain entries of transcript bytes that ``conversationChain(_:)``
