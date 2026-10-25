@@ -43,6 +43,25 @@ public struct RunningSession: Sendable, Hashable {
     /// Set while the session takes Remote Control (claude.ai/code, the mobile app).
     public var remoteControlSessionId: String?
 
+    /// A value made by hand, for previews and tests; ``runningSessions(configDirectory:)`` reads real ones.
+    public init(
+        pid: Int32, sessionId: String, cwd: String, name: String? = nil, status: Status = .idle, kind: String? = "interactive",
+        entrypoint: String? = "cli", version: String? = nil, startedAt: Date? = nil, updatedAt: Date? = nil,
+        remoteControlSessionId: String? = nil
+    ) {
+        self.pid = pid
+        self.sessionId = sessionId
+        self.cwd = cwd
+        self.name = name
+        self.status = status
+        self.kind = kind
+        self.entrypoint = entrypoint
+        self.version = version
+        self.startedAt = startedAt
+        self.updatedAt = updatedAt
+        self.remoteControlSessionId = remoteControlSessionId
+    }
+
     init?(record: JSONValue) {
         guard let pid = record["pid"]?.int, let sessionId = record["sessionId"]?.string, let cwd = record["cwd"]?.string
         else { return nil }

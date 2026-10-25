@@ -16,6 +16,23 @@ public struct SDKSessionInfo: Sendable, Hashable {
     public var tag: String?
     /// From the first entry's timestamp.
     public var createdAt: Date?
+
+    /// A value made by hand, for previews and tests; ``listSessions(directory:limit:offset:includeWorktrees:configDirectory:)`` reads real ones.
+    public init(
+        sessionId: String, summary: String, lastModified: Date, fileSize: Int? = nil, customTitle: String? = nil,
+        firstPrompt: String? = nil, gitBranch: String? = nil, cwd: String? = nil, tag: String? = nil, createdAt: Date? = nil
+    ) {
+        self.sessionId = sessionId
+        self.summary = summary
+        self.lastModified = lastModified
+        self.fileSize = fileSize
+        self.customTitle = customTitle
+        self.firstPrompt = firstPrompt
+        self.gitBranch = gitBranch
+        self.cwd = cwd
+        self.tag = tag
+        self.createdAt = createdAt
+    }
 }
 
 /// A user or assistant message read from a saved transcript.
