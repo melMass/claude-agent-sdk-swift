@@ -27,6 +27,32 @@ import Testing
         #expect(record["env"]?["CLAUDE_CODE_ENTRYPOINT"] == "sdk-swift")
     }
 
+    @Test func aLauncherRunsTheCLIThroughAnotherProgram() async throws {
+        let fake = try FakeCLI(Steps.initialize() + [
+            Steps.expectUser("Hi"),
+            Steps.systemInit,
+            Steps.assistant("Hello!"),
+            Steps.result("Hello!"),
+            ["expectEOF": true],
+        ]) { options in
+            options.model = "haiku"
+            // A directory of the remote machine: never looked for here.
+            options.cwd = "/nowhere/on/this/mac"
+            options.cliPath = nil
+        }
+        let executable = FakeCLI.executable
+        let transport = SubprocessCLITransport(options: fake.options) { arguments, environment in
+            .init(executable: "/bin/sh", arguments: ["-c", "exec \"$0\" \"$@\"", executable] + arguments,
+                  environment: environment, currentDirectory: NSTemporaryDirectory())
+        }
+        let messages = try await collect(query(prompt: "Hi", options: fake.options, transport: transport))
+        #expect(messages.last?.resultMessage?.result == "Hello!")
+        let record = try await fake.waitForRecord { $0["failure"] != nil || $0["stdin"]?.array?.count == 2 }
+        #expect(record["failure"] == .null)
+        #expect(record["args"]?.array?.contains("haiku") == true)
+        #expect(record["env"]?["CLAUDE_CODE_ENTRYPOINT"] == "sdk-swift")
+    }
+
     @Test func canUseToolAnswersAllowAndDeny() async throws {
         let fake = try FakeCLI(Steps.initialize() + [
             Steps.expectUser("Run it"),

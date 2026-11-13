@@ -32,17 +32,54 @@ public final class SubprocessCLITransport: Transport, @unchecked Sendable {
     private let frames: AsyncThrowingStream<JSONValue, Error>
     private let framesContinuation: AsyncThrowingStream<JSONValue, Error>.Continuation
 
+    /// The process a ``SubprocessCLITransport`` starts in place of the local
+    /// `claude`: a program that runs the CLI somewhere else (`ssh host …`,
+    /// `docker exec -i …`) and relays its stdin, stdout and stderr.
+    public struct Launch: Sendable {
+        public var executable: String
+        public var arguments: [String]
+        public var environment: [String: String]
+        public var currentDirectory: String?
+
+        public init(executable: String, arguments: [String], environment: [String: String], currentDirectory: String? = nil) {
+            self.executable = executable
+            self.arguments = arguments
+            self.environment = environment
+            self.currentDirectory = currentDirectory
+        }
+    }
+
+    /// Makes the launch from the CLI's arguments and the environment the SDK
+    /// would give it (``ClaudeAgentOptions/cwd`` names the remote directory).
+    public typealias Launcher = @Sendable (_ arguments: [String], _ environment: [String: String]) -> Launch
+
+    private let launcher: Launcher?
+
     /// The arguments the process was started with (after the executable).
     public let arguments: [String]
 
     public init(options: ClaudeAgentOptions) {
         self.options = options
+        launcher = nil
+        arguments = options.cliArguments()
+        (frames, framesContinuation) = AsyncThrowingStream.makeStream(of: JSONValue.self)
+    }
+
+    /// Runs the CLI through `launcher`: no local `claude` is looked for and
+    /// ``ClaudeAgentOptions/cwd`` need not exist on this machine.
+    public init(options: ClaudeAgentOptions, launcher: @escaping Launcher) {
+        self.options = options
+        self.launcher = launcher
         arguments = options.cliArguments()
         (frames, framesContinuation) = AsyncThrowingStream.makeStream(of: JSONValue.self)
     }
 
     public func connect() async throws {
         guard !state.withLock({ $0.started }) else { return }
+        if let launcher {
+            try start(launcher(arguments, options.processEnvironment()))
+            return
+        }
         let path: String
         if let given = options.cliPath {
             guard FileManager.default.isExecutableFile(atPath: given) else {
@@ -61,11 +98,16 @@ public final class SubprocessCLITransport: Transport, @unchecked Sendable {
             }
         }
 
+        try start(Launch(executable: path, arguments: arguments, environment: options.processEnvironment(), currentDirectory: options.cwd))
+    }
+
+    private func start(_ launch: Launch) throws {
+        let path = launch.executable
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = arguments
-        process.environment = options.processEnvironment()
-        if let cwd = options.cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+        process.arguments = launch.arguments
+        process.environment = launch.environment
+        if let cwd = launch.currentDirectory { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
         let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
         process.standardInput = stdin
         process.standardOutput = stdout
